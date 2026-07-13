@@ -148,6 +148,7 @@ class RMMotor : public LibXR::Application, public Motor {
   RMMotor(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
           const Param& param)
       : param_(param),
+        last_feedback_time_(LibXR::Timebase::GetMicroseconds()),
         can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})) {
     UNUSED(app);
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
@@ -248,11 +249,12 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 更新电机反馈
    *
    * @return
-   * - `ErrorCode::OK`：本次至少收到并解码了一帧反馈
-   * - `ErrorCode::NO_RESPONSE`：连续无反馈次数超过阈值
+   * - `ErrorCode::OK`：反馈未超过 150 ms，或本次收到并解码了反馈
+   * - `ErrorCode::NO_RESPONSE`：反馈超过 150 ms 未更新
    */
   LibXR::ErrorCode Update() override {
     LibXR::CAN::ClassicPack pack;
+    const auto NOW = LibXR::Timebase::GetMicroseconds();
     bool get_feedback = false;
     while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK) {
       Decode(pack);
@@ -260,17 +262,13 @@ class RMMotor : public LibXR::Application, public Motor {
     }
 
     if (get_feedback) {
-      no_response_count_ = 0U;
+      last_feedback_time_ = NOW;
       return LibXR::ErrorCode::OK;
     }
 
-    if (no_response_count_ <= NO_RESPONSE_THRESHOLD) {
-      ++no_response_count_;
-    }
-
-    return no_response_count_ > NO_RESPONSE_THRESHOLD
-               ? LibXR::ErrorCode::NO_RESPONSE
-               : LibXR::ErrorCode::OK;
+    return (NOW - last_feedback_time_).ToMicrosecond() <= FEEDBACK_TIMEOUT_US
+               ? LibXR::ErrorCode::OK
+               : LibXR::ErrorCode::NO_RESPONSE;
   }
 
   /**
@@ -318,17 +316,17 @@ class RMMotor : public LibXR::Application, public Motor {
   void OnMonitor() override {}
 
  private:
-  static constexpr uint16_t NO_RESPONSE_THRESHOLD = 255U;
+  static constexpr uint64_t FEEDBACK_TIMEOUT_US = 150000U;
 
   uint8_t index_{};  ///< 控制组索引，对应不同 control ID
   uint8_t num_{};    ///< 当前电机在 8 字节控制帧中的槽位编号
 
   float reverse_flag_ = 1.0f;  ///< 方向系数，正向为 1，反向为 -1
 
-  Param param_;                   ///< 构造参数副本
-  ConfigParam config_param_{};    ///< 反馈/控制 ID 配置
-  Motor::Feedback feedback_{};    ///< 最近一次解码得到的反馈
-  uint16_t no_response_count_{};  ///< 连续无反馈计数
+  Param param_;                                     ///< 构造参数副本
+  ConfigParam config_param_{};                      ///< 反馈/控制 ID 配置
+  Motor::Feedback feedback_{};                      ///< 最近一次解码得到的反馈
+  LibXR::MicrosecondTimestamp last_feedback_time_;  ///< 最近反馈时间
 
   LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};  ///< 当前实例所属总线共享状态
@@ -404,7 +402,7 @@ class RMMotor : public LibXR::Application, public Motor {
     feedback_.omega =
         feedback_.velocity * (static_cast<float>(LibXR::TWO_PI) / 60.0f);
     feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
-                       GetCurrentMAX() / MOTOR_CUR_RES;
+                       GetCurrentMAX() / MOTOR_CUR_RES * reverse_flag_;
     feedback_.temp = static_cast<float>(raw_temp);
     feedback_.state = 1;
   }
