@@ -21,10 +21,10 @@ need 'FEEDBACK_TIMEOUT_US = 150000U' '150 ms hard timeout'
 need 'LibXR::MicrosecondTimestamp last_feedback_time_' 'feedback timestamp'
 need 'last_feedback_time_\(LibXR::Timebase::GetMicroseconds\(\)\)' \
   'constructor initializes feedback timestamp'
-need 'const auto NOW = LibXR::Timebase::GetMicroseconds\(\);[[:space:]]*bool get_feedback = false;[[:space:]]*while \(recv_queue_\.Pop\(pack\) == LibXR::ErrorCode::OK\) \{[[:space:]]*Decode\(pack\);[[:space:]]*get_feedback = true;[[:space:]]*\}' \
+need 'const auto NOW = LibXR::Timebase::GetMicroseconds\(\);[[:space:]]*bool get_feedback = false;[[:space:]]*while \(recv_queue_\.Pop\(received\) == LibXR::ErrorCode::OK\) \{[[:space:]]*if \(Decode\(received\)\) \{[[:space:]]*get_feedback = true;[[:space:]]*\}[[:space:]]*\}' \
   'Update drains and decodes all queued feedback'
-need 'if \(get_feedback\) \{[[:space:]]*last_feedback_time_ = NOW;[[:space:]]*return LibXR::ErrorCode::OK;[[:space:]]*\}' \
-  'decoded feedback refreshes timestamp before returning OK'
+need 'if \(get_feedback\) \{[[:space:]]*last_feedback_time_ = feedback_\.received_time_us;[[:space:]]*return LibXR::ErrorCode::OK;[[:space:]]*\}' \
+  'decoded feedback refreshes watchdog from actual receive timestamp'
 need 'return \(NOW - last_feedback_time_\)\.ToMicrosecond\(\) <=[[:space:]]*FEEDBACK_TIMEOUT_US[[:space:]]*\?[[:space:]]*LibXR::ErrorCode::OK[[:space:]]*:[[:space:]]*LibXR::ErrorCode::NO_RESPONSE;' \
   'timeout is inclusive at exactly 150 ms'
 forbid 'NO_RESPONSE_THRESHOLD' 'loop-count threshold'
@@ -46,7 +46,7 @@ if [[ "${RMMOTOR_FRESHNESS_MUTANT_CHECK:-1}" == "1" ]]; then
   echo 'PASS: killed exclusive timeout boundary mutant'
 
   refresh_mutant="$mutant_dir/refresh.hpp"
-  sed 's/last_feedback_time_ = NOW;/\/\/ feedback timestamp refresh removed/' \
+  sed 's/last_feedback_time_ = feedback_\.received_time_us;/\/\/ feedback timestamp refresh removed/' \
     "$HEADER" >"$refresh_mutant"
   if RMMOTOR_FRESHNESS_MUTANT_CHECK=0 bash "$0" "$refresh_mutant" \
       >/dev/null 2>&1; then

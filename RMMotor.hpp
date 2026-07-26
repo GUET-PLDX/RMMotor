@@ -253,16 +253,17 @@ class RMMotor : public LibXR::Application, public Motor {
    * - `ErrorCode::NO_RESPONSE`：反馈超过 150 ms 未更新
    */
   LibXR::ErrorCode Update() override {
-    LibXR::CAN::ClassicPack pack;
+    TimestampedFeedback received;
     const auto NOW = LibXR::Timebase::GetMicroseconds();
     bool get_feedback = false;
-    while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK) {
-      Decode(pack);
-      get_feedback = true;
+    while (recv_queue_.Pop(received) == LibXR::ErrorCode::OK) {
+      if (Decode(received)) {
+        get_feedback = true;
+      }
     }
 
     if (get_feedback) {
-      last_feedback_time_ = NOW;
+      last_feedback_time_ = feedback_.received_time_us;
       return LibXR::ErrorCode::OK;
     }
 
@@ -318,6 +319,11 @@ class RMMotor : public LibXR::Application, public Motor {
  private:
   static constexpr uint64_t FEEDBACK_TIMEOUT_US = 150000U;
 
+  struct TimestampedFeedback {
+    LibXR::CAN::ClassicPack pack{};
+    uint64_t received_time_us = 0U;
+  };
+
   uint8_t index_{};  ///< 控制组索引，对应不同 control ID
   uint8_t num_{};    ///< 当前电机在 8 字节控制帧中的槽位编号
 
@@ -330,7 +336,7 @@ class RMMotor : public LibXR::Application, public Motor {
 
   LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};  ///< 当前实例所属总线共享状态
-  LibXR::MPMCQueue<LibXR::CAN::ClassicPack> recv_queue_{2};  ///< 接收队列
+  LibXR::MPMCQueue<TimestampedFeedback> recv_queue_{2};  ///< 接收队列
 
   static inline LibXR::Mutex
       bus_state_registry_mutex_{};                     ///< 总线状态注册表互斥锁
@@ -366,12 +372,14 @@ class RMMotor : public LibXR::Application, public Motor {
   static void RxCallback(bool in_isr, RMMotor* self,
                          const LibXR::CAN::ClassicPack& pack) {
     UNUSED(in_isr);
-    if (self->recv_queue_.Push(pack) == LibXR::ErrorCode::OK) {
+    const TimestampedFeedback RECEIVED{
+        pack, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds())};
+    if (self->recv_queue_.Push(RECEIVED) == LibXR::ErrorCode::OK) {
       return;
     }
 
     if (self->recv_queue_.Pop() == LibXR::ErrorCode::OK) {
-      self->recv_queue_.Push(pack);
+      self->recv_queue_.Push(RECEIVED);
     }
   }
 
@@ -379,7 +387,13 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 解码 RoboMaster 电机反馈帧
    * @param pack 反馈 CAN 帧
    */
-  void Decode(LibXR::CAN::ClassicPack& pack) {
+  bool Decode(const TimestampedFeedback& received) {
+    const auto& pack = received.pack;
+    if (pack.id != config_param_.id_feedback ||
+        pack.type != LibXR::CAN::Type::STANDARD || pack.dlc < 7U) {
+      return false;
+    }
+
     uint16_t raw_angle =
         static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
     int16_t raw_velocity =
@@ -405,6 +419,9 @@ class RMMotor : public LibXR::Application, public Motor {
                        GetCurrentMAX() / MOTOR_CUR_RES * reverse_flag_;
     feedback_.temp = static_cast<float>(raw_temp);
     feedback_.state = 1;
+    feedback_.received_time_us = received.received_time_us;
+    ++feedback_.sequence;
+    return true;
   }
 
   /**
