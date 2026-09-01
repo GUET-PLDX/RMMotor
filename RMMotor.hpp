@@ -19,14 +19,15 @@ depends: []
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 
 #include "Motor.hpp"
 #include "app_framework.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
 #include "libxr_def.hpp"
+#include "libxr_mem.hpp"
 #include "libxr_type.hpp"
+#include "list.hpp"
 #include "mutex.hpp"
 #include "ramfs.hpp"
 #include "thread.hpp"
@@ -128,7 +129,6 @@ class RMMotor : public LibXR::Application, public Motor {
   struct BusState {
     LibXR::CAN* can{};                               ///< 对应的 CAN 对象
     MotorGroupState groups[MOTOR_CTRL_ID_NUMBER]{};  ///< 4 个控制 ID 组的状态
-    BusState* next{};                                ///< 注册表单链表下一项
   };
 
   /**
@@ -207,7 +207,8 @@ class RMMotor : public LibXR::Application, public Motor {
       auto& group_state = GetMotorGroupState();
       LibXR::Mutex::LockGuard guard(group_state.mutex);
       if (group_state.group_mask == 0U) {
-        memset(group_state.tx_buff, 0, sizeof(group_state.tx_buff));
+        LibXR::Memory::FastSet(group_state.tx_buff, 0,
+                               sizeof(group_state.tx_buff));
       }
       group_state.pending_mask = 0U;
       group_state.group_mask |= static_cast<uint8_t>(1U << num_);
@@ -339,8 +340,8 @@ class RMMotor : public LibXR::Application, public Motor {
   LibXR::MPMCQueue<TimestampedFeedback> recv_queue_{2};  ///< 接收队列
 
   static inline LibXR::Mutex
-      bus_state_registry_mutex_{};                     ///< 总线状态注册表互斥锁
-  static inline BusState* bus_state_registry_head_{};  ///< 总线状态注册表头指针
+      bus_state_registry_mutex_{};                  ///< 总线状态注册表互斥锁
+  static inline LibXR::List bus_state_registry_{};  ///< 总线状态注册表
 
   /**
    * @brief 发送已经打包完成的 CAN 帧
@@ -564,14 +565,14 @@ class RMMotor : public LibXR::Application, public Motor {
    * @return 找到则返回对应状态指针，否则返回 `nullptr`
    */
   static BusState* FindBusState(LibXR::CAN* can) {
-    BusState* state = bus_state_registry_head_;
-    while (state != nullptr) {
-      if (state->can == can) {
-        return state;
+    BusState* found = nullptr;
+    bus_state_registry_.Foreach<BusState>([&](BusState& state) {
+      if (state.can == can) {
+        found = &state;
       }
-      state = state->next;
-    }
-    return nullptr;
+      return LibXR::ErrorCode::OK;
+    });
+    return found;
   }
 
   /**
@@ -583,18 +584,17 @@ class RMMotor : public LibXR::Application, public Motor {
    * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以 `can_bus_name` 字符串
    * 作为标识。这样同一 CAN 对象的多个 alias 会共享同一个拼包状态。
    *
-   * 注册表采用单链表保存，创建策略为只增不删，符合本项目初始化阶段分配、
-   * 运行期不释放的使用方式。
+   * 注册表用 `LibXR::List` 保存，创建策略为只增不删，符合本项目初始化阶段
+   * 分配、运行期不释放的使用方式。
    */
   static BusState& GetOrCreateBusState(LibXR::CAN* can) {
     LibXR::Mutex::LockGuard guard(bus_state_registry_mutex_);
     if (BusState* state = FindBusState(can); state != nullptr) {
       return *state;
     }
-    auto* state = new BusState{};
-    state->can = can;
-    state->next = bus_state_registry_head_;
-    bus_state_registry_head_ = state;
-    return *state;
+    auto* node = new LibXR::List::Node<BusState>{};
+    node->data_.can = can;
+    bus_state_registry_.Add(*node);
+    return node->data_;
   }
 };
