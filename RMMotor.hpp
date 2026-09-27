@@ -255,7 +255,6 @@ class RMMotor : public LibXR::Application, public Motor {
    */
   LibXR::ErrorCode Update() override {
     TimestampedFeedback received;
-    const auto NOW = LibXR::Timebase::GetMicroseconds();
     bool get_feedback = false;
     while (recv_queue_.Pop(received) == LibXR::ErrorCode::OK) {
       if (Decode(received)) {
@@ -265,12 +264,14 @@ class RMMotor : public LibXR::Application, public Motor {
 
     if (get_feedback) {
       last_feedback_time_ = feedback_.received_time_us;
-      return LibXR::ErrorCode::OK;
     }
 
-    return (NOW - last_feedback_time_).ToMicrosecond() <= FEEDBACK_TIMEOUT_US
-               ? LibXR::ErrorCode::OK
-               : LibXR::ErrorCode::NO_RESPONSE;
+    return IsOnline() ? LibXR::ErrorCode::OK : LibXR::ErrorCode::NO_RESPONSE;
+  }
+
+  bool IsOnline() const override {
+    const auto NOW = LibXR::Timebase::GetMicroseconds();
+    return (NOW - last_feedback_time_).ToMicrosecond() <= FEEDBACK_TIMEOUT_US;
   }
 
   /**

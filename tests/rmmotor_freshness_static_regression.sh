@@ -21,12 +21,14 @@ need 'FEEDBACK_TIMEOUT_US = 150000U' '150 ms hard timeout'
 need 'LibXR::MicrosecondTimestamp last_feedback_time_' 'feedback timestamp'
 need 'last_feedback_time_\(LibXR::Timebase::GetMicroseconds\(\)\)' \
   'constructor initializes feedback timestamp'
-need 'const auto NOW = LibXR::Timebase::GetMicroseconds\(\);[[:space:]]*bool get_feedback = false;[[:space:]]*while \(recv_queue_\.Pop\(received\) == LibXR::ErrorCode::OK\) \{[[:space:]]*if \(Decode\(received\)\) \{[[:space:]]*get_feedback = true;[[:space:]]*\}[[:space:]]*\}' \
+need 'TimestampedFeedback received;[[:space:]]*bool get_feedback = false;[[:space:]]*while \(recv_queue_\.Pop\(received\) == LibXR::ErrorCode::OK\) \{[[:space:]]*if \(Decode\(received\)\) \{[[:space:]]*get_feedback = true;[[:space:]]*\}[[:space:]]*\}' \
   'Update drains and decodes all queued feedback'
-need 'if \(get_feedback\) \{[[:space:]]*last_feedback_time_ = feedback_\.received_time_us;[[:space:]]*return LibXR::ErrorCode::OK;[[:space:]]*\}' \
+need 'if \(get_feedback\) \{[[:space:]]*last_feedback_time_ = feedback_\.received_time_us;[[:space:]]*\}' \
   'decoded feedback refreshes watchdog from actual receive timestamp'
-need 'return \(NOW - last_feedback_time_\)\.ToMicrosecond\(\) <=[[:space:]]*FEEDBACK_TIMEOUT_US[[:space:]]*\?[[:space:]]*LibXR::ErrorCode::OK[[:space:]]*:[[:space:]]*LibXR::ErrorCode::NO_RESPONSE;' \
-  'timeout is inclusive at exactly 150 ms'
+need 'return IsOnline\(\) \? LibXR::ErrorCode::OK : LibXR::ErrorCode::NO_RESPONSE;' \
+  'Update delegates freshness to IsOnline'
+need 'bool IsOnline\(\) const override \{[[:space:]]*const auto NOW = LibXR::Timebase::GetMicroseconds\(\);[[:space:]]*return \(NOW - last_feedback_time_\)\.ToMicrosecond\(\) <= FEEDBACK_TIMEOUT_US;[[:space:]]*\}' \
+  'IsOnline owns the inclusive 150 ms timeout'
 forbid 'NO_RESPONSE_THRESHOLD' 'loop-count threshold'
 forbid 'no_response_count_' 'loop-count freshness state'
 forbid 'warning_timeout' 'warning freshness stage'
