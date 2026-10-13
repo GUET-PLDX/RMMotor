@@ -3,15 +3,6 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: RoboMaster motor
-constructor_args:
-  - param:
-      model: RMMotor::Model::MOTOR_M3508
-      reverse: false
-      feedback_id: 0x201
-      can_bus_name: can1
-template_args: []
-required_hardware:
-  - can
 depends: []
 === END MANIFEST === */
 // clang-format on
@@ -21,9 +12,9 @@ depends: []
 #include <cstdint>
 
 #include "Motor.hpp"
-#include "app_framework.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
+#include "libxr.hpp"
 #include "libxr_def.hpp"
 #include "libxr_mem.hpp"
 #include "libxr_type.hpp"
@@ -75,7 +66,7 @@ depends: []
  *
  * 当前拼包语义为：组内所有已注册成员都在本轮更新过一次后，才触发一次发送。
  */
-class RMMotor : public LibXR::Application, public Motor {
+class RMMotor : public Motor {
  public:
   /**
    * @brief RoboMaster 电机型号
@@ -94,8 +85,6 @@ class RMMotor : public LibXR::Application, public Motor {
     Model model;           ///< 电机型号
     bool reverse;          ///< 是否反向解释反馈并反向输出控制
     uint16_t feedback_id;  ///< 电机反馈 CAN ID
-    const char*
-        can_bus_name;  ///< CAN 硬件别名，用于从 HardwareContainer 查找总线
   };
 
   /**
@@ -134,23 +123,19 @@ class RMMotor : public LibXR::Application, public Motor {
   /**
    * @brief 构造 RoboMaster 电机实例
    *
-   * @param hw 硬件容器
-   * @param app 应用管理器
    * @param param 模块构造参数
    *
    * @details
    * 构造时会完成：
-   * - 通过 `can_bus_name` 查找对应的 `LibXR::CAN`
+   * - 接收显式注入的 `LibXR::CAN` 引用
    * - 根据电机型号与反馈 ID 推导控制组和槽位编号
    * - 为所在 `(can, control_id)` 组注册成员位
    * - 注册反馈帧接收回调
    */
-  RMMotor(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
-          const Param& param)
+  RMMotor(LibXR::CAN& can, const Param& param)
       : param_(param),
         last_feedback_time_(LibXR::Timebase::GetMicroseconds()),
-        can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})) {
-    UNUSED(app);
+        can_((&can)) {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
     switch (param_.model) {
@@ -316,7 +301,7 @@ class RMMotor : public LibXR::Application, public Motor {
    *
    * @note 当前实现未使用该钩子。
    */
-  void OnMonitor() override {}
+  void OnMonitor() {}
 
  private:
   static constexpr uint64_t FEEDBACK_TIMEOUT_US = 150000U;
@@ -582,7 +567,7 @@ class RMMotor : public LibXR::Application, public Motor {
    * @return 总线状态引用
    *
    * @details
-   * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以 `can_bus_name` 字符串
+   * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以字符串别名
    * 作为标识。这样同一 CAN 对象的多个 alias 会共享同一个拼包状态。
    *
    * 注册表用 `LibXR::List` 保存，创建策略为只增不删，符合本项目初始化阶段
