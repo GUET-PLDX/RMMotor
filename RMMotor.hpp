@@ -127,15 +127,18 @@ class RMMotor : public Motor {
    *
    * @details
    * 构造时会完成：
-   * - 接收显式注入的 `LibXR::CAN` 引用
+   * - 直接接收对应的 `LibXR::CAN` 引用
    * - 根据电机型号与反馈 ID 推导控制组和槽位编号
    * - 为所在 `(can, control_id)` 组注册成员位
    * - 注册反馈帧接收回调
    */
-  RMMotor(LibXR::CAN& can, const Param& param)
+  RMMotor(LibXR::CAN& can,
+          const Param& param = {.model = RMMotor::Model::MOTOR_M3508,
+                                .reverse = false,
+                                .feedback_id = 513})
       : param_(param),
         last_feedback_time_(LibXR::Timebase::GetMicroseconds()),
-        can_((&can)) {
+        can_(&can) {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
     switch (param_.model) {
@@ -567,7 +570,7 @@ class RMMotor : public Motor {
    * @return 总线状态引用
    *
    * @details
-   * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以字符串别名
+   * 该函数以显式传入的 `LibXR::CAN*` 作为总线身份标识
    * 作为标识。这样同一 CAN 对象的多个 alias 会共享同一个拼包状态。
    *
    * 注册表用 `LibXR::List` 保存，创建策略为只增不删，符合本项目初始化阶段
