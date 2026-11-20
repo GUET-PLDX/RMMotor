@@ -136,8 +136,8 @@ class RMMotor : public Motor {
           const Param& param = {.model = RMMotor::Model::MOTOR_M3508,
                                 .reverse = false,
                                 .feedback_id = 513})
-      : param_(param),
-        last_feedback_time_(LibXR::Timebase::GetMicroseconds()),
+      : last_feedback_time_(LibXR::Timebase::GetMicroseconds()),
+        param_(param),
         can_(&can) {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
@@ -314,15 +314,14 @@ class RMMotor : public Motor {
     uint64_t received_time_us = 0U;
   };
 
-  uint8_t index_{};  ///< 控制组索引，对应不同 control ID
-  uint8_t num_{};    ///< 当前电机在 8 字节控制帧中的槽位编号
-
-  float reverse_flag_ = 1.0f;  ///< 方向系数，正向为 1，反向为 -1
-
-  Param param_;                                     ///< 构造参数副本
-  ConfigParam config_param_{};                      ///< 反馈/控制 ID 配置
   Motor::Feedback feedback_{};                      ///< 最近一次解码得到的反馈
   LibXR::MicrosecondTimestamp last_feedback_time_;  ///< 最近反馈时间
+
+  uint8_t index_{};  ///< 控制组索引，对应不同 control ID
+  uint8_t num_{};    ///< 当前电机在 8 字节控制帧中的槽位编号
+  float reverse_flag_ = 1.0f;  ///< 方向系数，正向为 1，反向为 -1
+  Param param_;                                     ///< 构造参数副本
+  ConfigParam config_param_{};                      ///< 反馈/控制 ID 配置
 
   LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};  ///< 当前实例所属总线共享状态
