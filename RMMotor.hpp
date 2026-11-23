@@ -14,6 +14,7 @@ depends: []
 #include "Motor.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
+#include "latest_snapshot.hpp"
 #include "libxr.hpp"
 #include "libxr_def.hpp"
 #include "libxr_mem.hpp"
@@ -238,19 +239,13 @@ class RMMotor : public Motor {
    * @brief 更新电机反馈
    *
    * @return
-   * - `ErrorCode::OK`：反馈未超过 150 ms，或本次收到并解码了反馈
+   * - `ErrorCode::OK`：最近有效反馈的接收时间未超过 150 ms
    * - `ErrorCode::NO_RESPONSE`：反馈超过 150 ms 未更新
    */
   LibXR::ErrorCode Update() override {
     TimestampedFeedback received;
-    bool get_feedback = false;
-    while (recv_queue_.Pop(received) == LibXR::ErrorCode::OK) {
-      if (Decode(received)) {
-        get_feedback = true;
-      }
-    }
-
-    if (get_feedback) {
+    if (feedback_frame_.LoadLatest(received)) {
+      Decode(received);
       last_feedback_time_ = feedback_.received_time_us;
     }
 
@@ -325,7 +320,7 @@ class RMMotor : public Motor {
 
   LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};  ///< 当前实例所属总线共享状态
-  LibXR::MPMCQueue<TimestampedFeedback> recv_queue_{2};  ///< 接收队列
+  LibXR::LatestSnapshot<TimestampedFeedback> feedback_frame_{TimestampedFeedback{}};
 
   static inline LibXR::Mutex
       bus_state_registry_mutex_{};                  ///< 总线状态注册表互斥锁
@@ -356,32 +351,26 @@ class RMMotor : public Motor {
    * @param pack 接收到的 CAN 帧
    *
    * @details
-   * 为了避免 CAN 接收中断长期占用 CPU，入队失败时最多丢弃一帧旧数据并重试一次。
+   * CAN 接收回调是唯一生产者，所属控制任务的 Update() 是唯一消费者。
    */
   static void RxCallback(bool in_isr, RMMotor* self,
                          const LibXR::CAN::ClassicPack& pack) {
     UNUSED(in_isr);
-    const TimestampedFeedback RECEIVED{
-        pack, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds())};
-    if (self->recv_queue_.Push(RECEIVED) == LibXR::ErrorCode::OK) {
+    if (pack.id != self->config_param_.id_feedback ||
+        pack.type != LibXR::CAN::Type::STANDARD || pack.dlc < 7U) {
       return;
     }
 
-    if (self->recv_queue_.Pop() == LibXR::ErrorCode::OK) {
-      self->recv_queue_.Push(RECEIVED);
-    }
+    self->feedback_frame_.Store(
+        {pack, static_cast<uint64_t>(LibXR::Timebase::GetMicroseconds())});
   }
 
   /**
    * @brief 解码 RoboMaster 电机反馈帧
-   * @param pack 反馈 CAN 帧
+   * @param received 已校验的反馈帧及其接收时间
    */
-  bool Decode(const TimestampedFeedback& received) {
+  void Decode(const TimestampedFeedback& received) {
     const auto& pack = received.pack;
-    if (pack.id != config_param_.id_feedback ||
-        pack.type != LibXR::CAN::Type::STANDARD || pack.dlc < 7U) {
-      return false;
-    }
 
     uint16_t raw_angle =
         static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
@@ -410,7 +399,6 @@ class RMMotor : public Motor {
     feedback_.state = 1;
     feedback_.received_time_us = received.received_time_us;
     ++feedback_.sequence;
-    return true;
   }
 
   /**
